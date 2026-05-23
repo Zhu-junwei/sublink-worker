@@ -42,11 +42,35 @@ jobs:
           fi
 
           git checkout main
-          if git merge --no-edit FETCH_HEAD; then
-            git push origin main
-            echo "Sync completed: $UPSTREAM_SHA"
-          else
-            echo "Auto-merge failed. Manual conflict resolution is required."
-            git merge --abort || true
-            exit 1
+
+          merge_status=0
+          git merge --no-commit --no-ff FETCH_HEAD || merge_status=$?
+
+          if [ "$merge_status" -ne 0 ]; then
+            workflow_conflicts="$(git diff --name-only --diff-filter=U -- .github/workflows || true)"
+            if [ -n "$workflow_conflicts" ]; then
+              echo "Keeping local workflow files:"
+              echo "$workflow_conflicts"
+              git checkout --ours -- .github/workflows
+              git add .github/workflows
+            fi
+
+            remaining_conflicts="$(git diff --name-only --diff-filter=U || true)"
+            if [ -n "$remaining_conflicts" ]; then
+              echo "Auto-merge failed. Manual conflict resolution is required:"
+              echo "$remaining_conflicts"
+              git merge --abort || true
+              exit 1
+            fi
           fi
+
+          if ! git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+            echo "No upstream update."
+            exit 0
+          fi
+
+          # GitHub's GITHUB_TOKEN cannot reliably push commits that modify workflows.
+          git restore --source=HEAD --staged --worktree .github/workflows
+          git commit --allow-empty -m "Merge upstream main"
+          git push origin main
+          echo "Sync completed: $UPSTREAM_SHA"
